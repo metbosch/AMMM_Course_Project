@@ -1,0 +1,27 @@
+/*********************************************
+ * OPL 12.4 Data
+ * Author: jbosch
+ * Creation Date: Dec 12, 2015 at 3:25:31 PM
+ *********************************************/
+
+ nOffices = 3;
+ nBackupCenters = 3;
+ nSegments = 3;
+
+ // Demand for each office (in PB)
+ demand = [ 8 10 2 ];
+
+ // Whether office o is conected with each center c
+ united = [ [ 1 1 1 ] [ 1 1 1 ] [ 1 1 1 ] ];
+
+ // Capacity of each backup center (in PB)
+ capacity = [ 14 18 15 ];
+
+ // Fixed cost of using each backup center (in thousands of euros)
+ fixedCost = [ 17 49 41 ];
+
+ // Cost of one PB in each segment
+ costPerPB = [ 3 2 1 ];
+
+ // Minimum number of PB to apply the segment price
+ minimumPB = [ 1 4 8 ];
