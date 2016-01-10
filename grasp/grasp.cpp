@@ -7,15 +7,50 @@
 #include <stdlib.h>     /* atoi */
 
 /*****    Constants and types definitions    *****/
-#define MAX_ITERS 1
+#define MAX_ITERS 100
 #define ALPHA 0.5
 #define INF 999999999
+#define MAX_CONSTRUCTIVE_DEPTH 100
 
-#define DEBUG(_stream) ( std::cout << _stream << std::endl )
+//#define DEBUG(_stream) ( std::cout << _stream << std::endl )
+#define DEBUG(_stream)
+#define VERBOSE(_stream) ( std::cout << _stream << std::endl )
 
 typedef struct {
+   unsigned int nOffices;
+   unsigned int nBackupCenters;
+   unsigned int nSegments;
+   std::vector<unsigned int> demand;
+   std::vector< std::vector<bool> >united;
+   std::vector<unsigned int> capacity;
+   std::vector<unsigned int> fixedCost;
+   std::vector<unsigned int> costPerPB;
+   std::vector<unsigned int> minimumPB;
+
+   unsigned int getSegment( unsigned int capacity ) {
+      unsigned int ret = nSegments - 1;
+      while ( minimumPB[ret] > capacity && ret != 0 ) --ret;
+      return ret;
+   }
+
+   unsigned int getCostPerPB( unsigned int usage ) {
+      return costPerPB[getSegment( usage )];
+   }
+
+   unsigned int getFixedCostCenter( unsigned int id ) {
+      return id > fixedCost.size() ? INF : fixedCost[id];
+   }
+} inputData_t;
+typedef inputData_t* inputData_ptr;
+
+typedef struct connection_str {
    unsigned int centerId;
    unsigned int capacity;
+public:
+   connection_str( unsigned int id, unsigned int c ) {
+      this->centerId = id;
+      this->capacity = c;
+   }
 } connection_t;
 
 typedef struct {
@@ -29,9 +64,51 @@ typedef struct {
    unsigned int storedPB;
 } centerInfo_t;
 
-typedef struct {
-   std::vector<relation_ptr> relations;
-   std::vector<unsigned int> centersUsage;
+typedef struct solution_str {
+   std::vector< std::vector<unsigned int> > usage;
+   std::vector< unsigned int> accCenters;
+
+   solution_str( inputData_ptr data ) {
+      unsigned int offices = data->nOffices;
+      unsigned int centers = data->nBackupCenters;
+      usage.resize( centers );
+      accCenters.resize( centers );
+      for ( int i = 0; i < centers; ++i ) {
+         accCenters[i] = 0;
+         usage[i].resize( offices );
+         for ( int j = 0; j < offices; ++j ) {
+            usage[i][j] = 0;
+         }
+      }
+   }
+
+   void addRelation( relation_ptr r ) {
+      unsigned int office = r->officeId;
+      for ( int i = 0; i < r->connections.size(); ++i ) {
+         unsigned int center = r->connections[i].centerId;
+         if ( center < usage.size() && office < usage[center].size() ) {
+            usage[center][office] += r->connections[i].capacity;
+            accCenters[center] += r->connections[i].capacity;
+         }
+      }
+   }
+
+   unsigned int getScore( inputData_ptr data ) {
+      int ret = 0;
+      for ( int center = 0; center < usage.size(); ++center ) {
+         int usage = accCenters[center];
+         /*for ( int office = 0; office < usage[center].size(); ++office ) {
+            usage += usage[center][office];
+         }*/
+         ret += usage != 0 ? data->getFixedCostCenter( center ) : 0;
+         ret += usage*data->getCostPerPB( usage );
+      }
+      return ret;
+   }
+
+   unsigned int getCenterUsage( unsigned int id ) {
+      return id > usage.size() ? 0 : accCenters[id];
+   }
 } solution_t;
 typedef solution_t* solution_ptr;
 
@@ -40,19 +117,6 @@ typedef struct {
    relation_ptr relation;
 } scoredRelation_t;
 typedef scoredRelation_t* scoredRelation_ptr;
-
-typedef struct {
-   unsigned int nOffices;
-   unsigned int nBackupCenters;
-   unsigned int nSegments;
-   std::vector<unsigned int> demand;
-   std::vector< std::vector<bool> >united;
-   std::vector<unsigned int> capacity;
-   std::vector<unsigned int> fixedCost;
-   std::vector<unsigned int> costPerPB;
-   std::vector<unsigned int> minimumPB;
-} inputData_t;
-typedef inputData_t* inputData_ptr;
 /***** End of constants and types definitions *****/
 
 std::vector<std::string> splitString(const std::string &s, char delim) {
@@ -206,140 +270,144 @@ void parseDataFile( const char* file ) {
    strmFile.close();
 }
 
-unsigned int getSegment( unsigned int capacity ) {
-   unsigned int ret = inputData->nSegments - 1;
-   while ( inputData->minimumPB[ret] > capacity && ret != 0 ) --ret;
-   return ret;
-}
-
-int f( solution_ptr s ) {
-   int ret = 0;
-   for ( int id = 0; id < s->centersUsage.size(); ++id ) {
-      unsigned int usage = s->centersUsage[id];
-      ret += usage == 0 ? inputData->fixedCost[id] : 0;
-      ret += usage*inputData->costPerPB[getSegment( usage )];
-   }
-   return ret;
-}
-
-int qRecursive( relation_ptr& rel, solution_ptr s, std::vector<unsigned int>& centerIds, int capacity ) {
-   if ( capacity == 0 ) {
+int qRecursiveRand( relation_ptr rel, solution_ptr s, std::vector<unsigned int>& centerIds, int capacity ) {
+   if ( capacity <= 0 ) {
       return 0;
    }
    if ( centerIds.size() == 0 ) {
+      DEBUG( "qRecursiveRand: no centers available and capacity is " << capacity << " for office " << rel->officeId );
       return INF;
    }
-   unsigned int cId = centerIds[centerIds.size() - 1];
-   centerIds.pop_back();
-   relation_ptr qMinRel = new relation_t;
-   qMinRel->officeId = rel->officeId;
-   int qMin = qRecursive( qMinRel, s, centerIds, capacity );
-   unsigned int qMinCapacity = 0;
-   for ( int c = capacity; c > 0; c = c/2 ) {
-      if ( s->centersUsage[cId] + c > inputData->capacity[cId] ) continue;
-      if ( c > inputData->demand[rel->officeId] ) continue;
-      if ( s->centersUsage[cId] + c < inputData->minimumPB[0] ) break;
-      relation_ptr tmpRel = new relation_t; tmpRel->officeId = rel->officeId;
-      unsigned int segmentPrev = getSegment( s->centersUsage[cId] );
-      unsigned int segmentNew = getSegment( s->centersUsage[cId] + c );
-      int qNew = s->centersUsage[cId] == 0 ? inputData->fixedCost[cId] : 0;
-      qNew += c*inputData->costPerPB[segmentNew];
-      qNew += ( inputData->costPerPB[segmentNew] - inputData->costPerPB[segmentPrev] )*s->centersUsage[cId];
-      qNew += qRecursive( tmpRel, s, centerIds, capacity - c );
-      if ( qNew < qMin ) {
-         qMin = qNew;
-         qMinCapacity = c;
-         delete qMinRel;
-         qMinRel = tmpRel;
-      } else {
-         delete tmpRel;
-      }
-   }
+   int tmp = rand()%centerIds.size();
+   unsigned int cId = centerIds[tmp];
+   centerIds.erase( centerIds.begin() + tmp );
+
+   // Try a Random capacity
+   unsigned int maxCapacity = inputData->capacity[cId] - s->getCenterUsage( cId );
+   unsigned int qMinCapacity = std::min( rand()%maxCapacity, ( unsigned int )( capacity ) );
+   unsigned int costSegPrev = inputData->getCostPerPB( s->getCenterUsage( cId ) );
+   unsigned int costSegNew = inputData->getCostPerPB( s->getCenterUsage( cId ) + qMinCapacity );
+   int qMin = s->getCenterUsage( cId ) == 0 ? inputData->getFixedCostCenter( cId ) : 0;
+   int qRec = qRecursiveRand( rel, s, centerIds, capacity - qMinCapacity );
+   qMin += qMinCapacity*costSegNew;
+   qMin += ( costSegNew - costSegPrev )*s->getCenterUsage( cId );
+   qMin = qRec >= INF ? INF : qMin + qRec;
+   DEBUG( "qRecursiveRand: center " << cId << " using " << qMinCapacity << " of " << maxCapacity << " (" <<inputData->capacity[cId]<< ", " << s->getCenterUsage( cId ) << ", " <<inputData->demand[rel->officeId]<<  ")" );
+
    centerIds.push_back( cId );
-   if ( qMinCapacity > 0 ) {
-      connection_t tmp;
-      tmp.centerId = cId;
-      tmp.capacity = qMinCapacity;
-      qMinRel->connections.push_back( tmp );
-      delete rel;
-      rel = qMinRel;
+   if ( qMinCapacity > 0 && qMin < INF ) {
+      rel->connections.push_back( connection_t( cId, qMinCapacity ) );
    }
    return qMin;
 }
 
-int q( relation_ptr rel, solution_ptr s ) {
+int qRecursiveMax( relation_ptr rel, solution_ptr s, std::vector<unsigned int>& centerIds, int capacity ) {
+   if ( capacity <= 0 ) {
+      return 0;
+   }
+   if ( centerIds.size() == 0 ) {
+      DEBUG( "qRecursiveMax: no centers available and capacity is " << capacity << " for office " << rel->officeId );
+      return INF;
+   }
+   int tmp = rand()%centerIds.size();
+   unsigned int cId = centerIds[tmp];
+   centerIds.erase( centerIds.begin() + tmp );
+
+   unsigned int maxCapacity = inputData->capacity[cId] - s->getCenterUsage( cId );
+   unsigned int qMinCapacity = std::min( maxCapacity, ( unsigned int )( capacity ) );
+   unsigned int costSegPrev = inputData->getCostPerPB( s->getCenterUsage( cId ) );
+   unsigned int costSegNew = inputData->getCostPerPB( s->getCenterUsage( cId ) + qMinCapacity );
+   DEBUG( "qRecursiveMax: center " << cId << " using " << qMinCapacity << " of " << maxCapacity << " (" <<inputData->capacity[cId]<< ", " << s->getCenterUsage( cId ) << ", " <<inputData->demand[rel->officeId]<<  ")" );
+   int qMin = s->getCenterUsage( cId ) == 0 ? inputData->getFixedCostCenter( cId ) : 0;
+   qMin += qMinCapacity*costSegNew;
+   qMin += ( costSegNew - costSegPrev )*s->getCenterUsage( cId );
+   int qRec = qRecursiveMax( rel, s, centerIds, capacity - qMinCapacity );
+   qMin = qRec >= INF ? INF : qMin + qRec;
+
+   centerIds.push_back( cId );
+   if ( qMinCapacity > 0 && qMin < INF ) {
+      rel->connections.push_back( connection_t ( cId, qMinCapacity ) );
+   }
+   return qMin;
+}
+
+int q( relation_ptr& rel, solution_ptr s ) {
    // Filtrar centres si estan conectats
    std::vector<unsigned int> centerIds;
+   unsigned int availableCapacity = 0;
    for ( int i = 0; i < inputData->nBackupCenters; ++i ) {
-      if ( inputData->united[rel->officeId][i] && s->centersUsage[i] < inputData->capacity[i] ) {
+      if ( inputData->united[rel->officeId][i] && s->getCenterUsage( i ) < inputData->capacity[i] ) {
          centerIds.push_back( i );
+         availableCapacity += std::min( inputData->capacity[i] - s->getCenterUsage( i ), inputData->demand[rel->officeId] );
       }
    }
-   relation_ptr tmpRel = new relation_t; tmpRel->officeId = rel->officeId;
-   int ret = qRecursive( tmpRel, s, centerIds, inputData->demand[rel->officeId]*2 ); // We need to map two copies per office ->request two times the demand
-   rel->connections.insert( rel->connections.begin(), tmpRel->connections.begin(), tmpRel->connections.end() );
-   delete tmpRel;
-   std::cout << "q(" << rel->officeId << ", s) with " << centerIds.size() << " centers and a demand of " << inputData->demand[rel->officeId] << ": [ ";
-   for ( int i = 0 ; i < rel->connections.size(); ++i) std::cout << "{" << rel->connections[i].centerId << ", " << rel->connections[i].capacity << "} ";
-   std::cout << "]" << std::endl;
+   if ( availableCapacity < inputData->demand[rel->officeId]*2 ) return INF;
+   int maxTries = 10;
+   int ret = INF;
+   for ( int tries = 0; tries < maxTries && ret >= INF; ++tries ) {
+      ret = qRecursiveRand( rel, s, centerIds, inputData->demand[rel->officeId]*2 ); // We need to map two copies per office ->request two times the demand
+      //std::cout << "q(" << rel->officeId << ", s) with " << centerIds.size() << " centers and a demand of " << inputData->demand[rel->officeId] << ": [ ";
+      //for ( int i = 0 ; i < rel->connections.size(); ++i) std::cout << "{" << rel->connections[i].centerId << ", " << rel->connections[i].capacity << "} ";
+      //std::cout << "]: score " << ret << std::endl;
+   }
+   if ( ret >= INF ) {
+      ret = qRecursiveMax( rel, s, centerIds, inputData->demand[rel->officeId]*2 );
+   }
    return ret;
 }
 
-solution_ptr newEmptySolution() {
-   solution_ptr s = new solution_t;
-   s->centersUsage.resize( inputData->nBackupCenters );
-   for ( int i = 0; i < s->centersUsage.size(); ++i ) {
-      s->centersUsage[i] = 0;
+solution_ptr constructivePhaseRecursive( double alpha, int depth ) {
+   VERBOSE( "Recursive constructive phase, depth " << depth );
+   solution_ptr s = NULL;
+   if ( depth < MAX_CONSTRUCTIVE_DEPTH ) {
+      s = new solution_t( inputData );
+      std::vector<scoredRelation_ptr> candidates( inputData->nOffices );
+      for ( int i = 0; i < candidates.size(); ++i ) {
+         candidates[i] = new scoredRelation_t;
+      }
+      while ( candidates.size() != 0 ) {
+         int minScore = INF;
+         int maxScore = -INF;
+         for ( int i = 0; i < candidates.size(); ++i ) {
+            candidates[i]->relation = new relation_t;
+            candidates[i]->relation->officeId = i; // This should be moved
+            candidates[i]->score = q( candidates[i]->relation, s );
+            if ( candidates[i]->score >= INF ) {
+               delete s;
+               for ( int i = 0; i < candidates.size(); ++i ) {
+                  delete candidates[i];
+               }
+               return constructivePhaseRecursive( alpha, depth + 1 );
+            }
+            minScore = std::min( candidates[i]->score, minScore );
+            maxScore = std::max( candidates[i]->score, maxScore );
+         }
+         int rclThreshold = maxScore + alpha*( minScore - maxScore );
+         std::vector<scoredRelation_ptr> rcl;
+         for ( int i = 0; i < candidates.size(); ++i ) {
+            if ( candidates[i]->score <= rclThreshold ) {
+               rcl.push_back( candidates[i] );
+            }
+         }
+         scoredRelation_ptr rel = candidates[rand()%candidates.size()];
+         s->addRelation( rel->relation );
+         for ( int i = 0; i < candidates.size(); ++i ) {
+            if ( rel == candidates[i] ) {
+               candidates.erase( candidates.begin() + i );
+            } else {
+               delete candidates[i]->relation;
+            }
+         }
+      }
+      for ( int i = 0; i < candidates.size(); ++i ) {
+         delete candidates[i];
+      }
    }
    return s;
-}
-
-void addRelationToSolution( relation_ptr rel, solution_ptr s ) {
-   for ( int i = 0; i < rel->connections.size(); ++i ) {
-      int id = rel->connections[i].centerId;
-      s->centersUsage[id] += rel->connections[i].capacity;
-      //DEBUG( "office " << rel->officeId << " - " << i << " > center " << id << ": " << rel->connections[i].capacity << " PBs, total used " <<  s->centersUsage[id]);
-      assert( s->centersUsage[id] <= inputData->capacity[id] );
-   }
-   s->relations.push_back( rel );
 }
 
 solution_ptr constructivePhase( double alpha ) {
-   solution_ptr s = newEmptySolution();
-   std::vector<scoredRelation_ptr> candidates( inputData->nOffices );
-   for ( int i = 0; i < candidates.size(); ++i ) {
-      candidates[i] = new scoredRelation_t;
-      candidates[i]->score = INF;
-      candidates[i]->relation = new relation_t;
-      candidates[i]->relation->officeId = i; // This should be moved
-   }
-   while ( candidates.size() != 0 ) {
-      int minScore = INF;
-      int maxScore = -INF;
-      for ( int i = 0; i < candidates.size(); ++i ) {
-         candidates[i]->score = q( candidates[i]->relation, s );
-         assert( candidates[i]->score != INF );
-         minScore = std::min( candidates[i]->score, minScore );
-         maxScore = std::max( candidates[i]->score, maxScore );
-      }
-      int rclThreshold = maxScore + alpha*( minScore - maxScore );
-      std::vector<scoredRelation_ptr> rcl;
-      for ( int i = 0; i < candidates.size(); ++i ) {
-         if ( candidates[i]->score <= rclThreshold ) {
-            rcl.push_back( candidates[i] );
-         }
-      }
-      scoredRelation_ptr rel = candidates[rand()%candidates.size()];
-      addRelationToSolution( rel->relation, s );
-      for ( int i = 0; i < candidates.size(); ++i ) {
-         if ( rel == candidates[i] ) {
-            candidates.erase( candidates.begin() + i );
-            break;
-         }
-      }
-   }
-
-   return s;
+   return constructivePhaseRecursive( alpha, 0 );
 }
 
 solution_ptr localSearchPhase( solution_ptr w ) {
@@ -361,11 +429,14 @@ int main( int argc, char** argv ) {
       DEBUG( "Main loop iteration: " << iter );
       solution_ptr w = constructivePhase( alpha );
       w = localSearchPhase( w );
-      int wScore = f( w );
+      int wScore = w->getScore( inputData );
       if ( wScore < wPlusScore ) {
+         VERBOSE( "New opt value: " << wScore << " < " << wPlusScore );
          delete wPlus;
          wPlus = w;
          wPlusScore = wScore;
+      } else {
+         delete w;
       }
    }
 
